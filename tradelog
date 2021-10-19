@@ -1,0 +1,381 @@
+#!/bin/sh
+#PROJECT IOS.
+#AUTOR: ANVAR KILYBAYEV (XKILYB00)
+
+
+export POSIXLY_CORRECT=yes
+export LC_NUMERIC=en_US.UTF-8
+
+print_help(){
+	echo "Usage: tradelog [-h|--help]"
+	echo "       tradelog [FILTER...] [COMMAND] [LOG...]"
+	echo "COMMAND:"
+	echo "       list-tick           Vypis seznamu vyskytujicich se burzovnich symbolu, tzv. \"tickeru\""
+	echo "       profit              Vypis celkoveho zisku z uzavrenych pozic"
+	echo "       pos                 Vypis hodnot akualne drzenych pozic serazenych sestupne dle hodnoty"
+	echo "       last-price          Vypis posledni zname ceny pro kazdy ticker"
+	echo "       hist-ord            Vypis histogramu poctu transakci dle tickeru"
+	echo "       graph-pos           Vypis grafu hodnot drzenych pozic dle tickeru"
+	echo "FILTER:"
+	echo "       -a DATETIME         after: jsou uvazovany pouze zaznamy PO tomto datu (bez tohoto data)"
+	echo "                           DATETIME je formatu YYYY -MM -DD HH:MM:SS"
+	echo "       -b DATETIME         before: jsou uvazovany pouze zaznamy PRED timto datem (bez tohoto data)"
+	echo "       -t TICKER           Jsou uvazovany pouze zaznamy odpovidajici danemu tickeru."
+	echo "       -w WIDTH            U vypisu grafu nastavuje jejich sirku, tedy delku nejdelsiho radku"
+	echo "                           na WIDTH."
+	echo "Prvni Projekt IOS"
+	echo "Autor:                     Anvar Kilybayev"
+	echo "Login:                     xkilyb00"
+}
+COMMAND=""
+LOG_FILES=""
+GZ_LOG_FILES=""
+TICKER=""
+FILTER=false
+WIDTH=""
+command_init(){
+	if [ "$FILTER" = false ]
+	then
+		READ_F=$(cat $LOG_FILES | awk -F ';' '{print}')
+	fi	
+	if [ $1 = "list-tick" ]
+	then
+		echo "$READ_F" | sort -t ';' -k 2,2 | awk -F ';' -v prev="" '
+		BEGIN{once = 0}
+		{
+			if(once == 0){
+				print $2
+				once++
+			}
+			else if($2 != prev){
+				print $2;
+			}
+			prev = $2
+		}'
+	elif [ $1 = "profit" ]
+	then
+		echo "$READ_F" | awk -F ';' -v sell="sell" -v buy="buy" '
+		BEGIN{sum_buy = 0; sum_sell = 0; value = 0; sum = 0}
+		{
+			value = $4 * $6
+			if($3 == buy){
+				sum_buy += value
+			}
+			else if($3 == sell){
+				sum_sell += value
+			}
+		}
+		END{
+			sum = sum_sell - sum_buy;
+	       		printf "%.2f\n", sum
+		}'
+	elif [ $1 = "pos" ]
+	then
+		echo "$READ_F" | sort -t ';' -k 2,2 | awk -v sell="sell" -v buy="buy" -v prev="" -F ';' '
+		BEGIN{volume_buy = 0; volume_sell = 0; once = 0; last_price = 0; volume = 0; result = 0; len = 0; max = 0} 
+		{
+			if (once == 0){
+				prev = $2
+				last_price = $4
+				once++
+			}
+			if($2 != prev){
+				volume = volume_buy - volume_sell
+				result = volume * last_price
+				pos[prev] = result
+				volume_buy = 0
+				volume_sell = 0
+				
+			}
+			if($3 == buy){
+				volume_buy += $6
+			}
+			else if($3 == sell){
+				volume_sell += $6
+			}
+			last_price = $4
+			prev = $2
+		} 
+		END{
+			volume = volume_buy - volume_sell
+			result = volume * last_price
+			pos[prev] = result
+			for(var in pos){
+				for(i = sqrt(pos[var]*pos[var]); i > 1; i = i/10){
+					len++
+				}
+				if(pos[var] > 0)
+					len += 3
+				else
+					len += 4
+				if(max < len)
+					max = len
+				len = 0
+			}
+			for(var in pos){
+				printf "%-10s: %*.2f\n", var, max, pos[var]
+			}
+		}' | sort -nr -t ':' -k 2,2 
+		elif [ $1 = "last-price" ] 
+		then
+			echo "$READ_F" | sort -t ';' -k 2,2 | awk -v prev="" -F ';' '
+			BEGIN{last_price = 0; once = 0}
+			{
+				if(once == 0){
+					prev = $2
+					last_price = $4
+					once++
+				}
+				if($2 != prev){
+					printf "%s:%.2f\n", prev, last_price
+				}
+				last_price = $4
+				prev = $2
+			}
+			END{printf "%s:%.2f\n", prev, last_price}' | sort -nr -t ':' -k 2,2 | awk -F ':' '
+			BEGIN{once = 0; len = 0}
+			{
+				if (once == 0){
+					for(i = 1; i < NF; i++)
+						len = length($i)
+					len += 3
+					once++
+				}
+				printf "%-10s: %*.2f\n", $1, len, $2
+			}' | sort -t ':' -k 1,1
+		elif [ $1 = "hist-ord" ]
+		then
+			echo "$READ_F" | sort -t ';' -k 2,2 | awk -F ';' '{print $2}' | uniq -c | sort -nr |awk -v width=$2 '
+			BEGIN{once = 0; amount = 0; value = 0}
+		       	{
+				if(width == ""){
+					printf "%-10s: ", $2
+					for(i = 0; i < $1; i++)
+						printf "#"
+					printf "\n"
+				}
+				else {
+					if(once == 0){
+						value = $1 / width
+						once++
+					}
+					amount = $1 / value
+					printf "%-10s: ", $2
+					for(i = 1; i <= amount; i++)
+						printf "#"
+					printf "\n"
+				}
+			}
+		       	END{}' | sort -t ':' -k 1,1
+		elif [ $1 = "graph-pos" ]
+		then
+			echo "$READ_F" | sort -t ';' -k 2,2 | awk -v sell="sell" -v buy="buy" -v sign="" -v prev="" -F ';' '
+		BEGIN{volume_buy = 0; volume_sell = 0; once = 0; last_price = 0; volume = 0; result = 0} 
+		{
+			if (once == 0){
+				prev = $2
+				last_price = $4
+				once++
+			}
+			if($2 != prev){
+				volume = volume_buy - volume_sell
+				result = volume * last_price
+				if(result < 0)
+					sign = "signed"
+				else
+					sign = "unsigned"
+				printf "%s:%.2f:%s\n", prev, result, sign
+				volume_buy = 0
+				volume_sell = 0
+			}
+			if($3 == buy){
+				volume_buy += $6
+			}
+			else if($3 == sell){
+				volume_sell += $6
+			}
+			last_price = $4
+			prev = $2
+		} 
+		END{volume = volume_buy - volume_sell;
+	       		result = volume * last_price;
+			if(result < 0)
+				sign = "signed"
+			else
+				sign = "unsigned"
+			printf "%s:%.2f:%s\n", prev, result, sign
+		}' | sed 's/-//' | sort -nr -t ':' -k 2,2 | awk -v width=$2  -F ':' '
+		BEGIN{max = 0; unit = 0}
+		{
+			if($2 > max)
+				max = $2
+			value[$1] = $2
+			sign[$1] = $3
+		}	
+		END{
+			unit = max / width
+			if(width == "")
+				unit = 1000
+			for(var in value){ 
+				printf "%-10s: ", var
+				for(i = 1; i <= value[var]/unit; i++){
+					if(sign[var] == "signed")
+						printf "!"
+					else
+						printf "#"
+				}
+				printf "\n"
+			}
+
+		}' | sort -t ':' -k 1,1
+		fi	
+
+}
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+	list-tick | pos)
+		COMMAND="$1"
+		shift
+		;;
+	profit)
+		COMMAND="$1"
+		shift
+		;;
+	last-price)
+		COMMAND="$1"
+		shift
+		;;
+	hist-ord)
+		COMMAND="$1"
+		shift
+		;;
+	graph-pos)
+		COMMAND="$1"
+		shift
+		;;
+	-a)
+		A_DATETIME="$2"
+		FILTER=true
+		shift
+		shift
+		;;
+	-b)
+		B_DATETIME="$2"
+		FILTER=true
+		shift
+		shift
+		;;
+	-h | --help)
+		print_help
+		exit 0
+		;;
+	-t)
+		if [ -z "$TICKER" ]
+		then
+			TICKER="$2"
+		else
+			TICKER="$TICKER:$2"
+		fi
+		FILTER=true
+		shift
+		shift
+		;;
+	-w)
+		WIDTH="$2"
+		shift
+		shift
+		;;
+	*.gz)
+		GZ_LOG_FILES="$1 $GZ_LOG_FILES"
+		shift	
+		;;
+	*)
+		if [ -f "$1" ]
+		then
+			LOG_FILES="$1 $LOG_FILES"
+			shift
+		else
+			echo "File does not exist"
+			exit 0
+		fi
+		;;
+	esac
+done
+if [ -z "$LOG_FILES" -a ! -z "$GZ_LOG_FILES" ]
+then
+	LOG_FILES=$(basename -s .gz *.gz)
+fi
+if [ ! -z "$A_DATETIME" -a -z "$B_DATETIME" -a ! -z "$TICKER" ]
+then
+	READ_F=$(cat $LOG_FILES | awk -v ticker="$TICKER" -v datetime="$A_DATETIME" -F ';' '{
+		count = split(ticker, ticker_s, ":");
+		for(i = 1; i <= count; i++){
+			if(ticker_s[i] == $2 && datetime < $1){
+				print;
+			}
+		}
+	}')
+elif [ ! -z "$B_DATETIME" -a -z "$A_DATETIME" -a ! -z "$TICKER" ]
+then
+	READ_F=$(cat $LOG_FILES | awk -v ticker="$TICKER" -v datetime="$B_DATETIME" -F ';' '{
+		count = split (ticker, ticker_s, ":");
+		for(i = 1; i <= count; i++){
+			if(ticker_s[i] == $2 && datetime > $1){
+				print;
+			}
+		}
+	}')
+
+elif [ ! -z "$A_DATETIME" -a ! -z "$B_DATETIME" -a ! -z "$TICKER" ]
+then
+	READ_F=$(cat $LOG_FILES | awk -v ticker="$TICKER" -v datetime_a="$A_DATETIME" -v datetime_b="$B_DATETIME" -F ';' '{
+		count = split (ticker, ticker_s, ":");
+		for(i = 1; i <= count; i++){
+			if(ticker_s[i] == $2 && datetime_a < $1 && datetime_b > $1){
+				print
+			}
+		}
+	}')
+elif [ ! -z "$A_DATETIME" -a -z "$B_DATETIME" -a -z "$TICKER" ]
+then
+	READ_F=$(cat $LOG_FILES | awk -v datetime="$A_DATETIME" -F ';' '{
+		if(datetime < $1){
+			print;
+		}
+	}')
+elif [ ! -z "$B_DATETIME" -a -z "$A_DATETIME" -a -z "$TICKER" ]
+then
+	READ_F=$(cat $LOG_FILES | awk -v datetime="$B_DATETIME" -F ';' '{
+		if(datetime > $1){
+			print;
+		}
+	}')
+
+elif [ ! -z "$A_DATETIME" -a ! -z "$B_DATETIME" -a -z "$TICKER" ]
+then
+	READ_F=$(cat $LOG_FILES | awk -v datetime_a="$A_DATETIME" -v datetime_b="$B_DATETIME" -F ';' '{
+		if(datetime_a < $1 && datetime_b > $1){
+			print;
+		}
+	}')
+elif [ ! -z "$TICKER" -a -z "$A_DATETIME" -a -z "$B_DATETIME" ]
+then
+	READ_F=$(cat $LOG_FILES | awk -v ticker="$TICKER" -F ';' '{
+		count = split(ticker, ticker_s, ":");
+		for(i = 1; i <= count; i++){
+			if(ticker_s[i] == $2){
+				print;
+			}
+		}
+	}')
+fi
+
+if [ -z "$TICKER" -a -z "$A_DATETIME" -a -z "$B_DATETIME" -a -z "$COMMAND" ]
+then
+	cat $LOG_FILES
+elif [ ! -z "$COMMAND" ]
+then
+	command_init $COMMAND $WIDTH
+else
+	echo "$READ_F"
+fi
